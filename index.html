@@ -318,6 +318,15 @@
     -webkit-appearance: none;
     margin: 0;
   }
+  /* Lead Time had no floor either, and its column is a narrow 10% (6% at
+     print width, 5% in PDF mode) — on a typical screen that measured out
+     to a ~37px box, so even its own "e.g. Ex Stock" placeholder was
+     clipped down to nothing and a real value like "4-6 Weeks ARO" showed
+     only its last couple of characters. It's a plain text field with no
+     spinner to remove, so the fix is just the width floor — sized for a
+     realistic lead-time phrase, same reasoning as the Part Number floor
+     above. */
+  .item-table .f-leadtime { min-width: 132px; }
   .col-part .f-note {
     margin-top: 4px; font-size: 11px; font-style: italic; color: var(--muted);
     padding: 3px 6px; background: transparent; border: 1px dashed var(--border);

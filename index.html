@@ -331,6 +331,19 @@
   .col-del { width: 24px; }
   .col-cost input, .col-markup input { color: var(--muted); }
   .col-price input { font-weight: 600; }
+  .price-cell { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .no-quote-pill {
+    font-size: 12px; font-style: italic; color: var(--muted);
+    background: var(--paper-2); border: 1px dashed var(--border);
+    border-radius: 5px; padding: 3px 7px; white-space: nowrap;
+  }
+  .price-noquote-toggle {
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: 10.5px; padding: 1px 0; white-space: nowrap;
+  }
+  .price-noquote-toggle:hover { color: var(--navy-soft); text-decoration: underline; }
+  .line-amt.no-quote { font-style: italic; color: var(--muted); font-size: 12px; }
+  #f-terms-custom { margin-top: 6px; }
   .line-margin {
     font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums;
     font-family: "IBM Plex Mono", monospace; margin-top: 1px;
@@ -442,6 +455,19 @@
     font-size: 12.5px; font-weight: 600; padding: 2px 0; cursor: pointer;
   }
   .link-btn:hover { text-decoration: underline; }
+  .link-btn.danger { color: var(--red); }
+  .company-result-row { display: flex; align-items: stretch; gap: 2px; }
+  .company-result-row .company-result { flex: 1 1 auto; min-width: 0; }
+  .company-result-edit {
+    flex: 0 0 auto; background: transparent; border: none; color: var(--muted);
+    cursor: pointer; font-size: 13px; padding: 0 8px; border-radius: 5px;
+  }
+  .company-result-edit:hover { background: var(--paper-2); color: var(--ink); }
+  .company-edit-panel {
+    margin: 4px 0 10px; padding: 12px; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: var(--paper-2);
+  }
+  .company-edit-panel .field-grid { margin-bottom: 8px; }
   .rfq-import-panel { margin-top: 10px; }
   .rfq-import-panel textarea {
     font-family: "IBM Plex Mono", monospace; font-size: 12px; margin-bottom: 8px;
@@ -597,7 +623,8 @@
     .col-cert { width: 8%; }
     .col-leadtime { width: 6%; }
     .col-amt { width: 12%; }
-    .row-note-toggle { display: none !important; }
+    .row-note-toggle, .price-noquote-toggle { display: none !important; }
+    .no-quote-pill { border-style: solid; }
     /* #f-to / #f-shipto / #f-notes / .f-note used to get swapped for a
        plain div reactively, from inside the browser's own 'beforeprint'
        event, so a page break could fall inside a long note like it can in
@@ -654,7 +681,8 @@
   }
   .pdf-render-mode .col-cost, .pdf-render-mode .col-markup,
   .pdf-render-mode .line-margin, .pdf-render-mode .margin-box { display: none !important; }
-  .pdf-render-mode .row-note-toggle { display: none !important; }
+  .pdf-render-mode .row-note-toggle, .pdf-render-mode .price-noquote-toggle { display: none !important; }
+  .pdf-render-mode .no-quote-pill { border-style: solid; }
   /* Same column-width rebalancing as @media print above, and the same
      switch to fixed table layout so those widths are actually honored
      instead of silently overridden by content-based auto layout — kept in
@@ -795,6 +823,47 @@ function certOptionsHtml(selected) {
   }).join("");
 }
 
+// Terms of Payment — a fixed preset list covers most quotes, but no fixed
+// list covers every customer's actual arrangement, so "Other" always
+// reveals a free-text field rather than forcing the closest-fit preset.
+var TERMS_OPTIONS = [
+  "NETT 30", "NETT 60", "NETT 90", "CIA (Cash in Advance)", "COD (Cash on Delivery)",
+  "LC (Letter of Credit)", "TT in Advance", "50% Deposit, 50% Before Shipment", "Open Account"
+];
+function termsOptionsHtml() {
+  return TERMS_OPTIONS.map(function (t) {
+    return '<option value="' + esc(t) + '">' + esc(t) + "</option>";
+  }).join("") + '<option value="__OTHER__">Other — type your own…</option>';
+}
+// Reads the effective Terms of Payment value, whichever of the select or
+// the free-text fallback is actually in use.
+function getTermsValue() {
+  var sel = document.getElementById("f-terms");
+  if (!sel) return "";
+  if (sel.value === "__OTHER__") {
+    var custom = document.getElementById("f-terms-custom");
+    return custom ? custom.value.trim() : "";
+  }
+  return sel.value;
+}
+// Sets Terms of Payment from a saved value — one of the fixed presets
+// selects normally; anything else (custom text typed on a past quote)
+// selects "Other" and restores that exact text into the free-text field,
+// so reopening a quote with custom terms never silently loses them.
+function setTermsValue(value) {
+  var sel = document.getElementById("f-terms");
+  var custom = document.getElementById("f-terms-custom");
+  if (!sel) return;
+  var v = value || "NETT 30";
+  if (TERMS_OPTIONS.indexOf(v) !== -1) {
+    sel.value = v;
+    if (custom) { custom.hidden = true; custom.value = ""; }
+  } else {
+    sel.value = "__OTHER__";
+    if (custom) { custom.hidden = false; custom.value = v; }
+  }
+}
+
 // Unit of measure — Each, Feet, Metre. Aerospace hardware trades in all
 // three (a hose or wire is quoted by length, most hardware by piece).
 var UOM_OPTIONS = ["EA", "FEET", "M"];
@@ -823,6 +892,26 @@ function rfqUomToOption(raw) {
   if (v === "FT" || v === "FEET" || v === "FOOT") return "FEET";
   if (v === "M" || v === "MTR" || v === "MTRS" || v === "METER" || v === "METERS" || v === "METRE" || v === "METRES") return "M";
   return "";
+}
+
+// Unit Price cell: either the normal number input, or — when a bulk price
+// import found no quote for this particular part — a plain "No quote" pill
+// with a small toggle to switch back to a real price. A number input can't
+// hold non-numeric text at all (the browser just clears it), so "no quote"
+// needs its own explicit state rather than being some magic string typed
+// into the price field.
+function priceCellHtml(item) {
+  var isNoQuote = !!(item && item.price === "NO_QUOTE");
+  if (isNoQuote) {
+    return (
+      '<span class="no-quote-pill">No quote</span>' +
+      '<button type="button" class="price-noquote-toggle" data-mode="price" title="Enter a price for this part">✎ Enter price</button>'
+    );
+  }
+  return (
+    '<input type="number" class="f-price" value="' + esc(item ? item.price : "") + '" min="0" step="0.01" title="Auto-filled from Cost × Markup — edit directly to override" />' +
+    '<button type="button" class="price-noquote-toggle" data-mode="noquote" title="Mark as no quote — no price available yet">🚫 No quote</button>'
+  );
 }
 
 function itemRowHtml(item, idx) {
@@ -870,7 +959,7 @@ function itemRowHtml(item, idx) {
     '<td class="col-uom"><select class="f-uom">' + uomOptionsHtml(item.uom) + "</select></td>" +
     '<td class="col-cost"><input type="number" class="f-cost" value="' + esc(item.cost || "") + '" min="0" step="0.01" placeholder="Cost" title="Cost from supplier — internal only, never printed" /></td>' +
     '<td class="col-markup"><input type="number" class="f-markup" value="' + esc(item.markup || "") + '" min="0" step="0.1" placeholder="%" title="Markup % over cost — internal only, never printed" /></td>' +
-    '<td class="col-price"><input type="number" class="f-price" value="' + esc(item.price) + '" min="0" step="0.01" title="Auto-filled from Cost × Markup — edit directly to override" /></td>' +
+    '<td class="col-price"><div class="price-cell">' + priceCellHtml(item) + "</div></td>" +
     '<td class="col-leadtime">' +
       '<input type="text" class="f-leadtime" value="' + esc(item.leadTime || "") + '" placeholder="e.g. Ex Stock" />' +
       // Same clipping risk as Description above (a single-line input) —
@@ -953,6 +1042,25 @@ function shellHtml() {
               '<input type="text" id="company-search" class="company-search-input" placeholder="🔍 Search your company list…" autocomplete="off" />' +
               '<div class="company-results" id="company-results" hidden></div>' +
             "</div>" +
+            '<button type="button" class="link-btn" id="company-add-btn">+ Add new company</button>' +
+            '<div class="company-edit-panel" id="company-edit-panel" hidden>' +
+              '<p class="section-label" id="company-edit-title">Add new company</p>' +
+              '<div class="field-grid">' +
+                '<div class="field-row"><label class="field" for="ce-company">Company name</label><input type="text" id="ce-company" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-code">Code</label><input type="text" id="ce-code" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-attn">ATTN / Contact</label><input type="text" id="ce-attn" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-phone">Phone</label><input type="text" id="ce-phone" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-city">City</label><input type="text" id="ce-city" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-st">State / Region</label><input type="text" id="ce-st" /></div>' +
+                '<div class="field-row"><label class="field" for="ce-zip">Zip / Postal</label><input type="text" id="ce-zip" /></div>' +
+              "</div>" +
+              '<div class="rfq-paste-row">' +
+                '<button type="button" class="ghost" id="company-edit-save">Save company</button>' +
+                '<button type="button" class="link-btn" id="company-edit-cancel">Cancel</button>' +
+                '<button type="button" class="link-btn danger" id="company-edit-delete" hidden>Delete company</button>' +
+              "</div>" +
+              '<p class="hint" id="company-edit-hint"></p>' +
+            "</div>" +
             '<textarea id="f-to" placeholder="ATTN:&#10;Company:&#10;Address:&#10;Country:"></textarea>' +
             '<div class="ta-mirror" id="f-to-mirror" aria-hidden="true"></div>' +
           "</div>" +
@@ -966,13 +1074,9 @@ function shellHtml() {
         '<div class="section">' +
           '<div class="field-grid cols-3">' +
             '<div class="field-row"><label class="field" for="f-custref">Cust Ref #</label><input type="text" id="f-custref" /></div>' +
-            '<div class="field-row"><label class="field" for="f-terms">Terms</label>' +
-              '<select id="f-terms">' +
-                '<option value="NETT 30">NETT 30</option>' +
-                '<option value="CIA">CIA</option>' +
-                '<option value="COD">COD</option>' +
-                '<option value="LC">LC</option>' +
-              "</select>" +
+            '<div class="field-row"><label class="field" for="f-terms">Terms of Payment</label>' +
+              '<select id="f-terms">' + termsOptionsHtml() + "</select>" +
+              '<input type="text" id="f-terms-custom" placeholder="Type your own terms…" hidden />' +
             "</div>" +
             '<div class="field-row"><label class="field" for="f-contact">Contact</label><input type="text" id="f-contact" /></div>' +
             '<div class="field-row"><label class="field" for="f-email">Email</label><input type="email" id="f-email" /></div>' +
@@ -1004,7 +1108,7 @@ function shellHtml() {
           "</tr></thead><tbody id=\"item-rows\">" +
           "</tbody></table></div>" +
           '<button type="button" class="add-line" id="add-line">+ Add line item</button>' +
-          '<p class="hint">Quoting a lot of parts? Copy a block from Excel (Part, CD, Qty, Price columns) and paste it into any cell below — it fills down as many rows as you need, no need to type each line. A plain list of part numbers, one per line, works too. If a floating “Paste” button appears and doesn’t do anything, click into the cell and press Ctrl+V (⌘V on Mac) instead — that always works here.</p>' +
+          '<p class="hint">Quoting a lot of parts? Copy a block from Excel and paste it into any cell below. Include a header row (Part Number, Description, CD, Cert, Qty, UOM, Cost, Markup %, Price, Lead Time, in any order — spare columns are fine) and it fills in whichever of those it recognizes, marking any part with no price in the sheet as “No quote” instead of leaving it blank. No header row falls back to a plain Part / CD / Qty / Price order, or just a list of part numbers, one per line. If a floating “Paste” button appears and doesn’t do anything, click into the cell and press Ctrl+V (⌘V on Mac) instead — that always works here.</p>' +
           '<div class="rfq-import">' +
             '<button type="button" class="link-btn" id="rfq-import-toggle">⤓ Import lines from an RFQ Log</button>' +
             '<div class="rfq-import-panel" id="rfq-import-panel" hidden>' +
@@ -1069,15 +1173,19 @@ function shellHtml() {
 
 function recalcRow(tr) {
   var qty = parseFloat(tr.querySelector(".f-qty").value) || 0;
-  var price = parseFloat(tr.querySelector(".f-price").value) || 0;
+  var priceInput = tr.querySelector(".f-price");
+  var isNoQuote = !priceInput; // "No quote" mode shows a pill, not a number input
+  var price = priceInput ? (parseFloat(priceInput.value) || 0) : 0;
   var costInput = tr.querySelector(".f-cost");
   var hasCost = costInput && costInput.value.trim() !== "";
   var cost = hasCost ? (parseFloat(costInput.value) || 0) : 0;
   var amt = qty * price;
-  tr.querySelector(".line-amt").textContent = money(amt);
+  var lineAmtEl = tr.querySelector(".line-amt");
+  lineAmtEl.textContent = isNoQuote ? "No quote" : money(amt);
+  lineAmtEl.classList.toggle("no-quote", isNoQuote);
   var marginEl = tr.querySelector(".line-margin");
   if (marginEl) {
-    if (hasCost) {
+    if (hasCost && !isNoQuote) {
       var margin = amt - cost * qty;
       marginEl.textContent = (margin < 0 ? "-$" : "+$") + money(Math.abs(margin));
       marginEl.classList.toggle("neg", margin < 0);
@@ -1086,7 +1194,7 @@ function recalcRow(tr) {
       marginEl.classList.remove("neg");
     }
   }
-  return { amt: amt, cost: hasCost ? cost * qty : 0, hasCost: hasCost };
+  return { amt: isNoQuote ? 0 : amt, cost: hasCost ? cost * qty : 0, hasCost: hasCost };
 }
 
 function recalcTotals() {
@@ -1133,17 +1241,42 @@ function addRow(item) {
 }
 
 function applyMarkup(tr) {
+  var priceInput = tr.querySelector(".f-price");
+  if (!priceInput) return; // row is in "No quote" mode — cost/markup edits shouldn't silently invent a price
   var cost = parseFloat(tr.querySelector(".f-cost").value) || 0;
   var markup = parseFloat(tr.querySelector(".f-markup").value) || 0;
-  var priceInput = tr.querySelector(".f-price");
   var computed = cost * (1 + markup / 100);
   priceInput.value = computed ? computed.toFixed(2) : "";
 }
 
+// Wires the Unit Price cell's input (recalc on edit) and its "No quote" /
+// "Enter price" toggle. Split out from wireRow so the toggle can re-run it
+// after swapping the cell's own markup between the two modes.
+function wirePriceCell(tr) {
+  var cell = tr.querySelector(".price-cell");
+  if (!cell) return;
+  var priceInput = cell.querySelector(".f-price");
+  if (priceInput) priceInput.addEventListener("input", recalcTotals);
+  var toggle = cell.querySelector(".price-noquote-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", function () {
+      var mode = toggle.getAttribute("data-mode");
+      cell.innerHTML = priceCellHtml({ price: mode === "noquote" ? "NO_QUOTE" : "" });
+      wirePriceCell(tr);
+      recalcTotals();
+      if (mode === "price") {
+        var inp = cell.querySelector(".f-price");
+        if (inp) inp.focus();
+      }
+    });
+  }
+}
+
 function wireRow(tr) {
-  tr.querySelectorAll(".f-qty, .f-price").forEach(function (inp) {
+  tr.querySelectorAll(".f-qty").forEach(function (inp) {
     inp.addEventListener("input", recalcTotals);
   });
+  wirePriceCell(tr);
   tr.querySelectorAll(".f-cost, .f-markup").forEach(function (inp) {
     inp.addEventListener("input", function () {
       applyMarkup(tr);
@@ -1173,6 +1306,13 @@ function wireRow(tr) {
         noteField.value = "";
         noteField.hidden = true;
         toggle.hidden = false;
+      }
+      // A "No quote" row has no .f-price input for the generic reset loop
+      // above to clear either — swap the cell back to a normal empty price.
+      var priceCell = tr.querySelector(".price-cell");
+      if (priceCell) {
+        priceCell.innerHTML = priceCellHtml({ price: "" });
+        wirePriceCell(tr);
       }
       recalcTotals();
       return;
@@ -1231,6 +1371,93 @@ function cleanNumber(s) {
 // default paste behavior: that default doesn't reliably fire in every
 // environment this page runs in, so relying on it made an ordinary
 // one-value paste silently do nothing.
+// Recognizes a wider set of columns than the plain Part/CD/Qty/Price paste
+// below by name — Cert and a "no quote yet" price included — so a block
+// copied straight out of a master parts/pricing sheet (in whatever column
+// order that sheet happens to use) fills in the whole row, not just the
+// four fixed columns. Falls back to the old fixed-order behavior whenever
+// no header is recognized, so a plain positional paste still works exactly
+// as before.
+var GRID_HEADER_ALIASES = {
+  "part number": "part", "part #": "part", "part": "part", "p/n": "part", "pn": "part",
+  "description": "description", "desc": "description",
+  "cd": "cd", "condition": "cd",
+  "cert": "cert", "certificate": "cert", "certification": "cert",
+  "qty": "qty", "quantity": "qty",
+  "uom": "uom", "unit": "uom",
+  "cost": "cost",
+  "markup": "markup", "markup %": "markup", "markup%": "markup",
+  "price": "price", "unit price": "price", "quoted price": "price", "quote": "price", "quote price": "price",
+  "lead time": "leadtime", "leadtime": "leadtime", "lead": "leadtime"
+};
+function detectGridHeader(cells) {
+  var map = {};
+  var matched = 0;
+  cells.forEach(function (c, i) {
+    var key = GRID_HEADER_ALIASES[String(c || "").trim().toLowerCase()];
+    if (key && map[key] == null) { map[key] = i; matched++; }
+  });
+  // Require Part plus at least one more recognized column, so a random
+  // single-cell paste (e.g. a part number that also happens to read like a
+  // header word) is never mistaken for a header row.
+  return (matched >= 2 && map.part != null) ? map : null;
+}
+
+// Applies a header-mapped bulk paste as brand new rows (like RFQ Log import
+// below), rather than overwriting whatever row/column the cursor happened
+// to be in — a full-row-per-line import doesn't have a meaningful "landing
+// cell" the way the old fixed 4-column paste does.
+function applyGridHeaderPaste(dataRows, colMap) {
+  var existing = document.querySelectorAll("#item-rows tr");
+  if (existing.length === 1 && !existing[0].querySelector(".f-part").value.trim()) {
+    existing[0].remove();
+  }
+
+  var added = 0;
+  var noQuoteCount = 0;
+  dataRows.forEach(function (cells) {
+    var part = rfqCell(cells, colMap.part);
+    if (!part) return;
+    var description = rfqCell(cells, colMap.description);
+    var cd = colMap.cd != null ? normalizeCd(rfqCell(cells, colMap.cd)) : "NE";
+    var certRaw = rfqCell(cells, colMap.cert);
+    var cert = normalizeCert(certRaw);
+    var note = "";
+    // An unrecognized Cert value isn't dropped — same convention as an
+    // unrecognized UOM in the RFQ Log import below — it's folded into the
+    // line's note instead, so nothing pasted in ever vanishes silently.
+    if (certRaw && !cert) note = "Cert (from paste): " + certRaw;
+    var qty = colMap.qty != null ? cleanNumber(cells[colMap.qty]) : "";
+    var uom = colMap.uom != null ? normalizeUom(rfqCell(cells, colMap.uom)) : "EA";
+    var cost = colMap.cost != null ? cleanNumber(cells[colMap.cost]) : "";
+    var markup = colMap.markup != null ? cleanNumber(cells[colMap.markup]) : "";
+    var price;
+    if (colMap.price == null) {
+      price = "";
+    } else {
+      var cleanedPrice = cleanNumber(rfqCell(cells, colMap.price));
+      if (cleanedPrice === "") {
+        // A Price column was present in the pasted sheet but this
+        // particular part had nothing in it — that's an explicit "not
+        // quoted yet", not a typo or a row still being filled in, so say
+        // so rather than leaving a blank cell that just reads as forgotten.
+        price = "NO_QUOTE";
+        noQuoteCount++;
+      } else {
+        price = cleanedPrice;
+      }
+    }
+    var leadTime = colMap.leadtime != null ? rfqCell(cells, colMap.leadtime) : "";
+    addRow({ part: part, description: description, cd: cd, cert: cert, qty: qty, uom: uom, cost: cost, markup: markup, price: price, leadTime: leadTime, note: note });
+    added++;
+  });
+
+  recalcTotals();
+  var msg = "Pasted " + added + " line" + (added === 1 ? "" : "s") + " into the table.";
+  if (noQuoteCount) msg += " " + noQuoteCount + " part" + (noQuoteCount === 1 ? "" : "s") + " had no price in the pasted data — marked “No quote”.";
+  setStatus(msg, added ? "ok" : "err");
+}
+
 function handleGridPaste(e) {
   var target = e.target;
   if (!target || !target.tagName || (target.tagName !== "INPUT" && target.tagName !== "SELECT" && target.tagName !== "TEXTAREA")) return;
@@ -1253,6 +1480,13 @@ function handleGridPaste(e) {
   if (!lines.length) return;
 
   e.preventDefault();
+
+  var rows = lines.map(function (l) { return l.indexOf("\t") !== -1 ? l.split("\t") : [l]; });
+  var headerMap = rows[0].length > 1 ? detectGridHeader(rows[0]) : null;
+  if (headerMap) {
+    applyGridHeaderPaste(rows.slice(1), headerMap);
+    return;
+  }
 
   var tbody = document.getElementById("item-rows");
   var rowsArr = Array.prototype.slice.call(tbody.children);
@@ -1421,7 +1655,8 @@ function collectDraft() {
     var part = tr.querySelector(".f-part").value.trim();
     var description = tr.querySelector(".f-description") ? tr.querySelector(".f-description").value.trim() : "";
     var qty = tr.querySelector(".f-qty").value;
-    var price = tr.querySelector(".f-price").value;
+    var priceInput = tr.querySelector(".f-price");
+    var price = priceInput ? priceInput.value : "NO_QUOTE";
     var cost = tr.querySelector(".f-cost") ? tr.querySelector(".f-cost").value : "";
     var markup = tr.querySelector(".f-markup") ? tr.querySelector(".f-markup").value : "";
     var uomField = tr.querySelector(".f-uom");
@@ -1450,7 +1685,7 @@ function collectDraft() {
     to: document.getElementById("f-to").value,
     shipTo: document.getElementById("f-shipto").value,
     custRef: document.getElementById("f-custref").value,
-    terms: document.getElementById("f-terms").value,
+    terms: getTermsValue(),
     contact: document.getElementById("f-contact").value,
     email: document.getElementById("f-email").value,
     phone: document.getElementById("f-phone").value,
@@ -1480,19 +1715,87 @@ function filterCompanies(query) {
 
 function companyResultsHtml(matches) {
   if (!matches.length) {
-    return '<div class="company-result-empty">No matches — type more of the name, or fill in the To field manually.</div>';
+    return '<div class="company-result-empty">No matches — type more of the name, or click “+ Add new company” below to save it for next time.</div>';
   }
   return matches.map(function (m) {
     var c = m.c;
     var loc = [c.city, c.st, c.zip].filter(Boolean).join(", ");
     var sub = [c.code, loc].filter(Boolean).join(" · ");
     return (
-      '<button type="button" class="company-result" data-idx="' + m.idx + '">' +
-        '<span class="cr-name">' + esc(c.company) + "</span>" +
-        (sub ? '<span class="cr-sub">' + esc(sub) + "</span>" : "") +
-      "</button>"
+      '<div class="company-result-row">' +
+        '<button type="button" class="company-result" data-idx="' + m.idx + '">' +
+          '<span class="cr-name">' + esc(c.company) + "</span>" +
+          (sub ? '<span class="cr-sub">' + esc(sub) + "</span>" : "") +
+        "</button>" +
+        '<button type="button" class="company-result-edit" data-idx="' + m.idx + '" title="Edit ' + esc(c.company) + '" aria-label="Edit ' + esc(c.company) + '">✎</button>' +
+      "</div>"
     );
   }).join("");
+}
+
+// Company directory add/edit — kept in memory here; the standalone/
+// SharePoint build overrides persistCompaniesChange() below to save the
+// whole list to a shared file everyone reads from, so a correction one
+// person makes shows up for the whole team without anyone asking for a
+// rebuilt file.
+var editingCompanyIdx = null;
+
+function openCompanyEditor(idx) {
+  editingCompanyIdx = (idx == null) ? null : idx;
+  var c = (editingCompanyIdx != null) ? COMPANIES[editingCompanyIdx] : null;
+  document.getElementById("company-edit-title").textContent = c ? "Edit company" : "Add new company";
+  document.getElementById("ce-company").value = c ? (c.company || "") : "";
+  document.getElementById("ce-code").value = c ? (c.code || "") : "";
+  document.getElementById("ce-attn").value = c ? (c.attn || "") : "";
+  document.getElementById("ce-phone").value = c ? (c.phone || "") : "";
+  document.getElementById("ce-city").value = c ? (c.city || "") : "";
+  document.getElementById("ce-st").value = c ? (c.st || "") : "";
+  document.getElementById("ce-zip").value = c ? (c.zip || "") : "";
+  document.getElementById("company-edit-hint").textContent = "";
+  document.getElementById("company-edit-delete").hidden = !c;
+  document.getElementById("company-results").hidden = true;
+  document.getElementById("company-edit-panel").hidden = false;
+  document.getElementById("ce-company").focus();
+}
+
+function closeCompanyEditor() {
+  editingCompanyIdx = null;
+  document.getElementById("company-edit-panel").hidden = true;
+}
+
+function readCompanyEditorForm() {
+  return {
+    company: document.getElementById("ce-company").value.trim(),
+    code: document.getElementById("ce-code").value.trim(),
+    attn: document.getElementById("ce-attn").value.trim(),
+    phone: document.getElementById("ce-phone").value.trim(),
+    city: document.getElementById("ce-city").value.trim(),
+    st: document.getElementById("ce-st").value.trim(),
+    zip: document.getElementById("ce-zip").value.trim()
+  };
+}
+
+// Overridden by the standalone/SharePoint build (see build_standalone.py)
+// to save the whole company directory to a shared file everyone reads
+// from. Here (and on the claude.ai artifact build) it just keeps the
+// change in memory for the current session.
+function persistCompaniesChange() {
+  if (!graphSignedInAccount()) {
+    setStatus("Company list updated for this session. Sign in with Microsoft (top right) to save it for everyone.", "ok");
+    return;
+  }
+  saveCompaniesToGraph(COMPANIES).then(function () {
+    setStatus("Company list updated and saved for everyone.", "ok");
+  }).catch(function (e) {
+    var code = (e && e.code) || "unknown";
+    if (code === "conflict") {
+      setStatus("Someone else just updated the company list — reload to see the latest, then reapply your change.", "err");
+    } else if (code === "signed_out") {
+      setStatus("Your Microsoft sign-in expired — click “Sign in with Microsoft” and try again.", "err");
+    } else {
+      setStatus("Company list updated here, but couldn’t save it for everyone (" + code + "). Try again once signed in.", "err");
+    }
+  });
 }
 
 function applyCompanyToForm(c) {
@@ -1566,7 +1869,7 @@ function loadDraftIntoForm(draft, quoteNumber, quoteDate) {
   document.getElementById("f-to").value = draft.to || "";
   document.getElementById("f-shipto").value = draft.shipTo || "";
   document.getElementById("f-custref").value = draft.custRef || "";
-  document.getElementById("f-terms").value = draft.terms || "";
+  setTermsValue(draft.terms);
   document.getElementById("f-contact").value = draft.contact || "";
   document.getElementById("f-email").value = draft.email || "";
   document.getElementById("f-phone").value = draft.phone || "";
@@ -1993,6 +2296,15 @@ function init() {
     document.getElementById("prepared-by-echo").textContent = preparedInput.value.trim() || "—";
   });
 
+  var termsSelect = document.getElementById("f-terms");
+  var termsCustom = document.getElementById("f-terms-custom");
+  if (termsSelect && termsCustom) {
+    termsSelect.addEventListener("change", function () {
+      termsCustom.hidden = termsSelect.value !== "__OTHER__";
+      if (!termsCustom.hidden) termsCustom.focus();
+    });
+  }
+
   document.getElementById("save-btn").addEventListener("click", function () {
     onSave(false);
   });
@@ -2007,6 +2319,7 @@ function init() {
   var companyResults = document.getElementById("company-results");
   if (companySearch && companyResults) {
     companySearch.addEventListener("input", function () {
+      closeCompanyEditor();
       var q = companySearch.value;
       if (!q.trim()) {
         companyResults.hidden = true;
@@ -2017,9 +2330,17 @@ function init() {
       companyResults.hidden = false;
     });
     companySearch.addEventListener("focus", function () {
-      if (companySearch.value.trim()) companyResults.hidden = false;
+      if (companySearch.value.trim()) {
+        closeCompanyEditor();
+        companyResults.hidden = false;
+      }
     });
     companyResults.addEventListener("click", function (e) {
+      var editBtn = e.target.closest(".company-result-edit");
+      if (editBtn) {
+        openCompanyEditor(parseInt(editBtn.getAttribute("data-idx"), 10));
+        return;
+      }
       var btn = e.target.closest(".company-result");
       if (!btn) return;
       var idx = parseInt(btn.getAttribute("data-idx"), 10);
@@ -2034,6 +2355,42 @@ function init() {
       if (!companyResults.hidden && e.target !== companySearch && !companyResults.contains(e.target)) {
         companyResults.hidden = true;
       }
+    });
+  }
+
+  var companyAddBtn = document.getElementById("company-add-btn");
+  if (companyAddBtn) {
+    companyAddBtn.addEventListener("click", function () { openCompanyEditor(null); });
+  }
+  var companyEditCancel = document.getElementById("company-edit-cancel");
+  if (companyEditCancel) companyEditCancel.addEventListener("click", closeCompanyEditor);
+  var companyEditSave = document.getElementById("company-edit-save");
+  if (companyEditSave) {
+    companyEditSave.addEventListener("click", function () {
+      var data = readCompanyEditorForm();
+      if (!data.company) {
+        document.getElementById("company-edit-hint").textContent = "Company name is required.";
+        return;
+      }
+      if (editingCompanyIdx == null) {
+        COMPANIES.push(data);
+      } else {
+        COMPANIES[editingCompanyIdx] = data;
+      }
+      closeCompanyEditor();
+      persistCompaniesChange();
+    });
+  }
+  var companyEditDelete = document.getElementById("company-edit-delete");
+  if (companyEditDelete) {
+    companyEditDelete.addEventListener("click", function () {
+      if (editingCompanyIdx == null) return;
+      var c = COMPANIES[editingCompanyIdx];
+      showConfirm("Remove " + (c ? c.company : "this company") + " from the company list? This doesn’t affect any quote already saved.", function () {
+        COMPANIES.splice(editingCompanyIdx, 1);
+        closeCompanyEditor();
+        persistCompaniesChange();
+      }, "Delete company");
     });
   }
 
@@ -2143,10 +2500,12 @@ var MSAL_CONFIG = {
 };
 var GRAPH_SCOPES = ["Files.ReadWrite", "User.Read"];
 var GRAPH_LEDGER_URL = "https://graph.microsoft.com/v1.0/sites/stealthjet.sharepoint.com:/sites/StealthJetSingapore:/drive/root:/Quote Runner App/ledger.json";
+var GRAPH_COMPANIES_URL = "https://graph.microsoft.com/v1.0/sites/stealthjet.sharepoint.com:/sites/StealthJetSingapore:/drive/root:/Quote Runner App/companies.json";
 var msalInstance = (typeof msal !== "undefined" && MSAL_CONFIG.auth.clientId.indexOf("%%") !== 0)
   ? new msal.PublicClientApplication(MSAL_CONFIG)
   : null;
 var _ledgerEtag = null;
+var _companiesEtag = null;
 
 function graphSignedInAccount() {
   if (!msalInstance) return null;
@@ -2219,6 +2578,55 @@ function saveLedgerToGraph(newState) {
   });
 }
 
+// Company directory — same shared-file-with-ETag pattern as the ledger
+// above, in its own file so an edit to a company's address is a small,
+// independent save that can never collide with (or get lost inside) a
+// concurrent quote save. Nobody has necessarily edited a company yet on a
+// fresh deployment, so a 404 here just means "keep using the built-in seed
+// list this page already loaded" rather than an error — the file gets
+// created automatically the first time anyone actually saves an edit.
+function refreshCompaniesFromGraph() {
+  return graphGetToken(false).then(function (token) {
+    return fetch(GRAPH_COMPANIES_URL + ":/content", { headers: { Authorization: "Bearer " + token } });
+  }).then(function (resp) {
+    if (resp.status === 404) { _companiesEtag = null; return null; } // no edits saved to Graph yet — keep the built-in seed list
+    if (!resp.ok) throw { code: "graph_error", status: resp.status };
+    _companiesEtag = resp.headers.get("ETag");
+    return resp.json();
+  }).then(function (remote) {
+    // Defensive: only replace the built-in seed list with something that
+    // actually looks like a company directory. A malformed or unexpected
+    // response (wrong file at that path, a bad manual edit on SharePoint)
+    // should never wipe out the working in-memory list — just keep using
+    // what's already loaded.
+    if (!remote || !Array.isArray(remote)) return;
+    COMPANIES.length = 0;
+    remote.forEach(function (c) { COMPANIES.push(c); });
+  });
+}
+
+function saveCompaniesToGraph(newCompanies) {
+  return graphGetToken(true).then(function (token) {
+    var headers = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+    if (_companiesEtag) headers["If-Match"] = _companiesEtag;
+    return fetch(GRAPH_COMPANIES_URL + ":/content", {
+      method: "PUT",
+      headers: headers,
+      body: JSON.stringify(newCompanies)
+    });
+  }).then(function (resp) {
+    if (resp.status === 412) throw { code: "conflict" };
+    if (!resp.ok) throw { code: "graph_error", status: resp.status };
+    return resp.json();
+  }).then(function (saved) {
+    // A successful PUT's own response doesn't reliably hand back a fresh
+    // ETag the same way the ledger's does in every case — re-fetch it so
+    // the very next edit's If-Match is guaranteed current rather than
+    // risking a spurious 412 against ourselves.
+    return refreshCompaniesFromGraph().then(function () { return saved; });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var signinBtn = document.getElementById("signin-btn");
   if (!signinBtn) return;
@@ -2231,7 +2639,7 @@ document.addEventListener("DOMContentLoaded", function () {
     signinBtn.disabled = true;
     setStatus("Signing in…");
     graphGetToken(true).then(function () {
-      return refreshLedgerFromGraph();
+      return Promise.all([refreshLedgerFromGraph(), refreshCompaniesFromGraph()]);
     }).then(function () {
       updateSignInUi();
       setStatus("Signed in — ledger refreshed.", "ok");
@@ -2242,7 +2650,7 @@ document.addEventListener("DOMContentLoaded", function () {
   msalInstance.handleRedirectPromise().catch(function () {}).then(function () {
     updateSignInUi();
     if (graphSignedInAccount()) {
-      refreshLedgerFromGraph().then(updateSignInUi).catch(function () {});
+      Promise.all([refreshLedgerFromGraph(), refreshCompaniesFromGraph()]).then(updateSignInUi).catch(function () {});
     }
   });
 });

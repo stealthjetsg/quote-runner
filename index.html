@@ -288,6 +288,36 @@
     -webkit-appearance: none;
     margin: 0;
   }
+  /* Cost and Markup % never had a floor at all — narrower than Price's
+     original 84px (their columns are 8% and 7% of the table, the
+     tightest of any number field), so both the "Cost"/"%" placeholder
+     text and anything actually typed were clipped down to a sliver from
+     the very first character — the same invisible-blank failure as
+     above, just worse since there was no floor to even partially help.
+     Cost holds the same kind of real dollar figure as Price (a supplier
+     cost, not a percentage), so it gets the same width and spinner
+     treatment; Markup is always a short percentage (rarely more than
+     3-4 digits) so a smaller floor is enough, but it gets the spinner
+     removed too since the arrows were eating a disproportionate share
+     of its narrower box. */
+  .item-table .f-cost {
+    min-width: 108px;
+    -moz-appearance: textfield;
+  }
+  .item-table .f-cost::-webkit-outer-spin-button,
+  .item-table .f-cost::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .item-table .f-markup {
+    min-width: 64px;
+    -moz-appearance: textfield;
+  }
+  .item-table .f-markup::-webkit-outer-spin-button,
+  .item-table .f-markup::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
   .col-part .f-note {
     margin-top: 4px; font-size: 11px; font-style: italic; color: var(--muted);
     padding: 3px 6px; background: transparent; border: 1px dashed var(--border);

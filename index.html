@@ -267,9 +267,27 @@
   /* Same floor for Unit Price — previously had none at all, so a small
      decimal value like "0.05" (a real RFQ unit cost) was squeezed into
      the same invisible-blank failure as the other native controls above.
-     Sized with headroom for a 4-digit-dollar price too (e.g. "1234.56"),
-     not just the 2-digit test values that first exposed the bug. */
-  .item-table .f-price { min-width: 84px; }
+     The 84px this started at accounted for the digits themselves but not
+     for the browser's own up/down spinner arrows on a number input, which
+     eat a further ~20px on the right — so a real 4-digit-dollar price
+     (e.g. "1234.56", an ordinary quote for a real aerospace part, not an
+     edge case) had its leading digit scrolled out of view behind the
+     spinner the moment it was typed: the exact same invisible-blank
+     failure as before, just re-introduced by a control the earlier floor
+     didn't know to leave room for. Fixed two ways: drop the spinner
+     entirely (it adds nothing for a currency field, and a misclick on the
+     down-arrow silently changing a quoted price is its own hazard) and
+     widen the floor with the space that recovers, plus real headroom
+     above the 7-character test case that first exposed this. */
+  .item-table .f-price {
+    min-width: 108px;
+    -moz-appearance: textfield;
+  }
+  .item-table .f-price::-webkit-outer-spin-button,
+  .item-table .f-price::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
   .col-part .f-note {
     margin-top: 4px; font-size: 11px; font-style: italic; color: var(--muted);
     padding: 3px 6px; background: transparent; border: 1px dashed var(--border);
@@ -1177,7 +1195,14 @@ function shellHtml() {
 function recalcRow(tr) {
   var qty = parseFloat(tr.querySelector(".f-qty").value) || 0;
   var priceInput = tr.querySelector(".f-price");
-  var isNoQuote = !priceInput; // "No quote" mode shows a pill, not a number input
+  // "No quote" mode shows a pill instead of a number input — but a row can
+  // also carry a real price input that's simply been left empty (a blank
+  // manual entry, an RFQ-import row, or an old plain paste that never went
+  // through the "No quote" toggle at all). Both cases should read and print
+  // as "No quote" rather than a misleading $0.00 that looks like a real
+  // quoted price of zero.
+  var priceBlank = priceInput ? priceInput.value.trim() === "" : false;
+  var isNoQuote = !priceInput || priceBlank;
   var price = priceInput ? (parseFloat(priceInput.value) || 0) : 0;
   var costInput = tr.querySelector(".f-cost");
   var hasCost = costInput && costInput.value.trim() !== "";

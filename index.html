@@ -1595,9 +1595,36 @@ var RFQ_HEADER_ALIASES = {
   "description": "description",
   "qty": "qty",
   "quantity": "qty",
-  "uom": "uom"
+  "uom": "uom",
+  // Condition and Best Historical Price are the two RFQ Log Template
+  // columns with a direct, safe home on a quoted line: Condition is
+  // exactly the same NE/OH/SV/REP/FN code as this app's own CD field, and
+  // Best Historical Price is an internal reference number (what this part
+  // last sold for), which belongs in the internal-only Cost field, never
+  // in anything printed. The template's other columns (Urgency, Product
+  // Category, Priority, OEM, Match Status, the Vendor 1-5/Price 1-5/Date
+  // 1-5 comparison block) are deliberately left unmapped here — none of
+  // them has a field on the quote that isn't customer-visible, and the
+  // vendor/price data in particular must never end up printed on a
+  // customer's quote.
+  "condition": "condition",
+  "best historical price (usd)": "histprice",
+  // "Cost (USD)" and "Markup %" were added to the template (as its last
+  // two columns, so pasting an older-shaped log still lines up correctly)
+  // specifically so a salesperson can key in the real cost and markup for
+  // a part right in the log, before it ever reaches this app — importing
+  // then fills both internal-only fields and computes Price the same way
+  // typing them in by hand would (see the applyMarkup(tr) call below).
+  // "Cost (USD)" wins over "Best Historical Price" when a row has both —
+  // it's the actual figure someone chose for this quote, not just a past
+  // reference number.
+  "cost (usd)": "cost",
+  "markup %": "markup"
 };
-var RFQ_FIXED_ORDER = { client: 0, email: 2, part: 3, description: 4, qty: 5, uom: 6 };
+var RFQ_FIXED_ORDER = {
+  client: 0, email: 2, part: 3, description: 4, qty: 5, uom: 6, condition: 7, histprice: 13,
+  cost: 30, markup: 31
+};
 var EMAIL_RE = /^\S+@\S+\.\S+$/;
 
 function rfqCell(cells, idx) {
@@ -1641,9 +1668,21 @@ function detectRfqOrderByContent(rows) {
   // it'd be at with no Requester Name column: Client(0), Date(1), Email(2)), the extra slot
   // right after Client Name (index 1) is the Requester Name / contact column.
   var contactIdx = bestIdx > 2 ? 1 : null;
+  // Condition and Best Historical Price (USD) sit at fixed offsets past
+  // UOM in every RFQ Log Template variant seen (with or without Requester
+  // Name — that column only shifts everything from Email onward as a
+  // block, so anchoring on Email still lands correctly on both): +5 for
+  // Condition, +11 for Best Historical Price, same reasoning as Part/
+  // Description/Qty/UOM's own offsets just above. Cost (USD) and Markup %
+  // were added as the template's very last two columns (+28/+29 past
+  // Email — i.e. right after Date 5) specifically so they land after
+  // everything else, whether or not this row happens to carry the older
+  // 31-column shape from before they existed.
   return {
     client: 0, contact: contactIdx, email: bestIdx,
-    part: bestIdx + 1, description: bestIdx + 2, qty: bestIdx + 3, uom: bestIdx + 4
+    part: bestIdx + 1, description: bestIdx + 2, qty: bestIdx + 3, uom: bestIdx + 4,
+    condition: bestIdx + 5, histprice: bestIdx + 11,
+    cost: bestIdx + 28, markup: bestIdx + 29
   };
 }
 
@@ -1697,7 +1736,32 @@ function importRfqRows(text) {
     if (uomRaw && !uom) {
       description = description ? description + " (" + uomRaw + ")" : "(" + uomRaw + ")";
     }
-    addRow({ part: part, description: description, cd: "NE", qty: qty, uom: uom || "EA", price: "" });
+    // Condition -> CD: normalizeCd already falls back to "NE" for anything
+    // it doesn't recognize (a blank cell, or a free-text value like the
+    // template's own "All Conditions"), so this is a strict improvement
+    // over always assuming "NE" — a log row that actually says "OH" or
+    // "SV" now carries that through instead of being silently overwritten.
+    var cd = normalizeCd(rfqCell(cells, colMap.condition));
+    // Best Historical Price (USD) -> Cost: an internal reference only
+    // (never printed — see the RFQ_HEADER_ALIASES comment above), so this
+    // pre-fills what the part last sold for without ever inventing a
+    // customer-facing price; Price itself stays blank/"No quote" until
+    // whoever's quoting decides a markup.
+    var histPrice = colMap.histprice != null ? cleanNumber(rfqCell(cells, colMap.histprice)) : "";
+    // Cost (USD) / Markup % -> the same internal-only fields a person
+    // fills in by hand on this app. An explicit Cost typed into the log
+    // for this quote outranks the historical reference price above (it's
+    // a real decision someone made, not just a lookup); markup is only
+    // ever explicit, there's no fallback for it.
+    var costRaw = colMap.cost != null ? cleanNumber(rfqCell(cells, colMap.cost)) : "";
+    var markupRaw = colMap.markup != null ? cleanNumber(rfqCell(cells, colMap.markup)) : "";
+    var cost = costRaw || histPrice;
+    var tr = addRow({ part: part, description: description, cd: cd, qty: qty, uom: uom || "EA", price: "", cost: cost, markup: markupRaw });
+    // Computes Price from Cost x Markup exactly like typing them into the
+    // row would (see applyMarkup) — a no-op when Cost is blank/zero, so a
+    // row with only Condition/Cost filled in still lands as "No quote"
+    // rather than a misleading $0.00 or an unintended zero-markup price.
+    applyMarkup(tr);
     added++;
     if (!clientName) {
       var c = rfqCell(cells, colMap.client);

@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stealth Jet Quote Runner</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap">
+<!-- SheetJS: reads the uploaded RFQ Log .xlsx client-side (no server) so its
+     rows can be fed through the exact same import pipeline a pasted block
+     goes through — see the "rfq-upload" wiring further down. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root {
     --bg: #e9edf3;
@@ -1172,13 +1176,16 @@ function shellHtml() {
           '<div class="rfq-import">' +
             '<button type="button" class="link-btn" id="rfq-import-toggle">⤓ Import lines from an RFQ Log</button>' +
             '<div class="rfq-import-panel" id="rfq-import-panel" hidden>' +
-              '<p class="hint">In the RFQ Log (Alvin / Hassanah / Jael / Lina / Nora’s file), select the rows for this customer’s open request — include the header row if you can, it maps columns automatically; whole rows with no header also work. Copy, paste below, then Import.</p>' +
+              '<p class="hint">In the RFQ Log (Alvin / Hassanah / Jael / Lina / Nora’s file), select the rows for this customer’s open request — include the header row if you can, it maps columns automatically; whole rows with no header also work. Copy, paste below, then Import — or upload the .xlsx file directly.</p>' +
               '<textarea id="rfq-import-box" rows="4" placeholder="Paste RFQ Log rows here (with or without the header row)…"></textarea>' +
               '<p class="hint hint-paste">Ctrl+V (⌘V on Mac) doesn’t work for everyone in this box — if nothing happens when you paste, click “Paste from clipboard” below instead.</p>' +
               '<div class="rfq-paste-row">' +
                 '<button type="button" class="ghost" id="rfq-paste-btn">📋 Paste from clipboard</button>' +
+                '<button type="button" class="ghost" id="rfq-upload-btn">📄 Upload Excel file…</button>' +
+                '<input type="file" id="rfq-upload-input" accept=".xlsx,.xls,.csv" hidden />' +
                 '<button type="button" class="ghost" id="rfq-import-btn">Import rows</button>' +
               "</div>" +
+              '<p class="hint hint-upload" id="rfq-upload-status" hidden></p>' +
             "</div>" +
           "</div>" +
         "</div>" +
@@ -1609,12 +1616,13 @@ var RFQ_HEADER_ALIASES = {
   // customer's quote.
   "condition": "condition",
   "best historical price (usd)": "histprice",
-  // "Cost (USD)" and "Markup %" were added to the template (as its last
-  // two columns, so pasting an older-shaped log still lines up correctly)
-  // specifically so a salesperson can key in the real cost and markup for
-  // a part right in the log, before it ever reaches this app — importing
-  // then fills both internal-only fields and computes Price the same way
-  // typing them in by hand would (see the applyMarkup(tr) call below).
+  // "Cost (USD)" and "Markup %" were added to the template right after
+  // UOM (before Condition), mirroring where Cost/Markup sit relative to
+  // UOM on the quote's own item table — specifically so a salesperson can
+  // key in the real cost and markup for a part right in the log, before
+  // it ever reaches this app — importing then fills both internal-only
+  // fields and computes Price the same way typing them in by hand would
+  // (see the applyMarkup(tr) call below).
   // "Cost (USD)" wins over "Best Historical Price" when a row has both —
   // it's the actual figure someone chose for this quote, not just a past
   // reference number.
@@ -1622,8 +1630,8 @@ var RFQ_HEADER_ALIASES = {
   "markup %": "markup"
 };
 var RFQ_FIXED_ORDER = {
-  client: 0, email: 2, part: 3, description: 4, qty: 5, uom: 6, condition: 7, histprice: 13,
-  cost: 30, markup: 31
+  client: 0, email: 2, part: 3, description: 4, qty: 5, uom: 6, cost: 7, markup: 8, condition: 9,
+  histprice: 15
 };
 var EMAIL_RE = /^\S+@\S+\.\S+$/;
 
@@ -1668,21 +1676,18 @@ function detectRfqOrderByContent(rows) {
   // it'd be at with no Requester Name column: Client(0), Date(1), Email(2)), the extra slot
   // right after Client Name (index 1) is the Requester Name / contact column.
   var contactIdx = bestIdx > 2 ? 1 : null;
-  // Condition and Best Historical Price (USD) sit at fixed offsets past
-  // UOM in every RFQ Log Template variant seen (with or without Requester
-  // Name — that column only shifts everything from Email onward as a
-  // block, so anchoring on Email still lands correctly on both): +5 for
-  // Condition, +11 for Best Historical Price, same reasoning as Part/
-  // Description/Qty/UOM's own offsets just above. Cost (USD) and Markup %
-  // were added as the template's very last two columns (+28/+29 past
-  // Email — i.e. right after Date 5) specifically so they land after
-  // everything else, whether or not this row happens to carry the older
-  // 31-column shape from before they existed.
+  // Cost (USD) and Markup % sit right after UOM (mirroring their position
+  // relative to UOM on the quote's own item table), then Condition and
+  // Best Historical Price (USD) follow at fixed offsets past that — same
+  // reasoning as Part/Description/Qty/UOM's own offsets just above, with
+  // or without Requester Name (that column only shifts everything from
+  // Email onward as a block, so anchoring on Email still lands correctly
+  // either way).
   return {
     client: 0, contact: contactIdx, email: bestIdx,
     part: bestIdx + 1, description: bestIdx + 2, qty: bestIdx + 3, uom: bestIdx + 4,
-    condition: bestIdx + 5, histprice: bestIdx + 11,
-    cost: bestIdx + 28, markup: bestIdx + 29
+    cost: bestIdx + 5, markup: bestIdx + 6,
+    condition: bestIdx + 7, histprice: bestIdx + 13
   };
 }
 
@@ -2323,14 +2328,21 @@ function init() {
       });
     });
   }
-  document.getElementById("rfq-import-btn").addEventListener("click", function () {
-    var box = document.getElementById("rfq-import-box");
-    var text = box.value;
-    if (!text.trim()) { setStatus("Paste some RFQ Log rows first.", "err"); return; }
+  // Shared by the "Import rows" button (pasted/typed text already sitting in
+  // the textarea) and the Excel-upload path below (a workbook sheet
+  // converted to the same tab-separated shape) — one pipeline, one place
+  // that ever decides what counts as a successful import, so upload can
+  // never drift from paste in what it accepts or how it fills the form.
+  function runRfqImport(text, opts) {
+    opts = opts || {};
+    if (!text.trim()) {
+      setStatus(opts.emptyMsg || "Paste some RFQ Log rows first.", "err");
+      return null;
+    }
     var result = importRfqRows(text);
     if (!result.added) {
-      setStatus("Couldn’t find a Part Number in what was pasted — check the columns and try again.", "err");
-      return;
+      setStatus(opts.noPartMsg || "Couldn’t find a Part Number in what was pasted — check the columns and try again.", "err");
+      return result;
     }
     recalcTotals();
     var toField = document.getElementById("f-to");
@@ -2345,14 +2357,77 @@ function init() {
     if (result.email && emailField && !emailField.value.trim()) {
       emailField.value = result.email;
     }
-    box.value = "";
     autoGrowTextarea(toField);
     setStatus(
-      "Imported " + result.added + " line" + (result.added === 1 ? "" : "s") +
+      (opts.prefix || "Imported ") + result.added + " line" + (result.added === 1 ? "" : "s") +
       (result.client ? " for " + result.client : "") + ".",
       "ok"
     );
+    return result;
+  }
+  document.getElementById("rfq-import-btn").addEventListener("click", function () {
+    var box = document.getElementById("rfq-import-box");
+    var result = runRfqImport(box.value);
+    if (result && result.added) box.value = "";
   });
+  // Excel-upload path: parse the workbook fully client-side (SheetJS, loaded
+  // in <head>) — nothing is sent anywhere — turn its first sheet into the
+  // exact tab-separated text a copy-paste from Excel would produce, and run
+  // it through the very same importRfqRows()/runRfqImport() pipeline above,
+  // so an uploaded file is recognized identically to pasted rows (same
+  // header aliases, same headerless content-detection fallback, same
+  // Cost/Markup auto-fill).
+  var rfqUploadBtn = document.getElementById("rfq-upload-btn");
+  var rfqUploadInput = document.getElementById("rfq-upload-input");
+  if (rfqUploadBtn && rfqUploadInput) {
+    rfqUploadBtn.addEventListener("click", function () { rfqUploadInput.click(); });
+    rfqUploadInput.addEventListener("change", function () {
+      var file = rfqUploadInput.files && rfqUploadInput.files[0];
+      if (!file) return;
+      var uploadStatus = document.getElementById("rfq-upload-status");
+      if (typeof XLSX === "undefined") {
+        setStatus("Couldn’t load the Excel reader (no internet connection?) — try pasting the rows instead.", "err");
+        rfqUploadInput.value = "";
+        return;
+      }
+      if (uploadStatus) {
+        uploadStatus.hidden = false;
+        uploadStatus.textContent = "Reading " + file.name + "…";
+      }
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          var data = new Uint8Array(e.target.result);
+          var wb = XLSX.read(data, { type: "array" });
+          var sheetName = wb.SheetNames[0];
+          var sheet = wb.Sheets[sheetName];
+          // FS: "\t" — same tab-separated shape importRfqRows() already
+          // parses from a pasted block; blankrows:false drops fully empty
+          // rows the same way a trailing-blank-line paste would.
+          var text = XLSX.utils.sheet_to_csv(sheet, { FS: "\t", blankrows: false });
+          var result = runRfqImport(text, {
+            emptyMsg: file.name + " doesn’t seem to have any rows in it.",
+            noPartMsg: "Couldn’t find a Part Number in " + file.name + " — check it’s an RFQ Log-shaped sheet and try again.",
+            prefix: "Imported from " + file.name + ": "
+          });
+          if (uploadStatus) {
+            uploadStatus.hidden = !result || !result.added;
+          }
+        } catch (err) {
+          setStatus("Couldn’t read " + file.name + " — make sure it’s a valid .xlsx/.xls/.csv file.", "err");
+          if (uploadStatus) uploadStatus.hidden = true;
+        } finally {
+          rfqUploadInput.value = "";
+        }
+      };
+      reader.onerror = function () {
+        setStatus("Couldn’t read " + file.name + ".", "err");
+        if (uploadStatus) uploadStatus.hidden = true;
+        rfqUploadInput.value = "";
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
   document.getElementById("f-misc").addEventListener("input", recalcTotals);
   document.getElementById("f-freight").addEventListener("input", recalcTotals);
   // The browser's own print pagination only comes out clean when this page

@@ -2724,6 +2724,11 @@ var GRAPH_COMPANIES_URL = "https://graph.microsoft.com/v1.0/sites/stealthjet.sha
 var msalInstance = (typeof msal !== "undefined" && MSAL_CONFIG.auth.clientId.indexOf("%%") !== 0)
   ? new msal.PublicClientApplication(MSAL_CONFIG)
   : null;
+// msal-browser v3 requires initialize() to be called (and awaited) before
+// any other MSAL API is used, or every login/token call rejects with
+// "uninitialized_public_client_application". Kick it off immediately so
+// it's already resolved by the time anyone clicks "Sign in with Microsoft".
+var _msalInitPromise = msalInstance ? msalInstance.initialize() : Promise.resolve();
 var _ledgerEtag = null;
 var _companiesEtag = null;
 
@@ -2735,13 +2740,15 @@ function graphSignedInAccount() {
 
 function graphGetToken(interactive) {
   if (!msalInstance) return Promise.reject({ code: "unavailable" });
-  var account = graphSignedInAccount();
-  var silent = account
-    ? msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: account })
-    : Promise.reject({ code: "signed_out" });
-  return silent.catch(function () {
-    if (!interactive) return Promise.reject({ code: "signed_out" });
-    return msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+  return _msalInitPromise.then(function () {
+    var account = graphSignedInAccount();
+    var silent = account
+      ? msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: account })
+      : Promise.reject({ code: "signed_out" });
+    return silent.catch(function () {
+      if (!interactive) return Promise.reject({ code: "signed_out" });
+      return msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+    });
   }).then(function (res) {
     return res.accessToken;
   });
@@ -2867,7 +2874,9 @@ document.addEventListener("DOMContentLoaded", function () {
       setStatus("Sign-in didn’t complete — try again.", "err");
     }).finally(function () { signinBtn.disabled = false; });
   });
-  msalInstance.handleRedirectPromise().catch(function () {}).then(function () {
+  _msalInitPromise.then(function () {
+    return msalInstance.handleRedirectPromise();
+  }).catch(function () {}).then(function () {
     updateSignInUi();
     if (graphSignedInAccount()) {
       Promise.all([refreshLedgerFromGraph(), refreshCompaniesFromGraph()]).then(updateSignInUi).catch(function () {});

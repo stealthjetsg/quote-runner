@@ -2870,8 +2870,11 @@ document.addEventListener("DOMContentLoaded", function () {
     }).then(function () {
       updateSignInUi();
       setStatus("Signed in — ledger refreshed.", "ok");
-    }).catch(function () {
-      setStatus("Sign-in didn’t complete — try again.", "err");
+    }).catch(function (e) {
+      var detail = (e && (e.errorCode || e.name)) || (e && e.code) || "unknown_error";
+      console.error("Quote Runner sign-in failed:", e);
+      updateSignInUi();
+      setStatus("Sign-in didn’t complete (" + detail + ") — try again.", "err");
     }).finally(function () { signinBtn.disabled = false; });
   });
   _msalInitPromise.then(function () {
